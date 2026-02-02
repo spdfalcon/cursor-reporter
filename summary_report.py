@@ -26,7 +26,7 @@ DEFAULT_MODEL = "openai/gpt-oss-120b:free"
 REQUEST_TIMEOUT = 180  # ثانیه
 MAX_RETRIES = 3
 # اگر OPENROUTER_API_KEY ست نکردی، این کلید استفاده می‌شود
-DEFAULT_API_KEY = "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"
+DEFAULT_API_KEY = "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"
 
 
 def load_report(path: Path) -> str:

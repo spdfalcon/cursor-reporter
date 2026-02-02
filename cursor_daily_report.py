@@ -236,10 +236,74 @@ def _escape_fence(s: str, fence: str = "```") -> str:
     return fence
 
 
+# Placeholder when code/long content is removed so report stays light for AI
+_CODE_OMITTED = "[کد/محتوای طولانی حذف شده]"
+
+
+def _remove_fenced_blocks(text: str) -> str:
+    """Replace ```...``` and ````...```` blocks with a short placeholder."""
+    out = text
+    # Match ``` or ````, optional lang, newline, content until closing fence
+    for _ in range(100):  # limit iterations
+        m = re.search(r"(`{3,})\w*\n.*?\n\1", out, re.DOTALL)
+        if not m:
+            break
+        out = out[: m.start()] + _CODE_OMITTED + out[m.end() :]
+    return out
+
+
+def _shorten_tool_call_body(text: str) -> str:
+    """
+    Replace long 'contents:', 'old_string:', 'new_string:' values in [Tool call] blocks
+    so the report stays short; keep path and tool name for context.
+    """
+    lines = text.split("\n")
+    result: list[str] = []
+    i = 0
+
+    def is_key_line(ln: str) -> bool:
+        s = ln.strip()
+        return (s.startswith("path:") or s.startswith("contents:") or
+                s.startswith("old_string:") or s.startswith("new_string:"))
+
+    while i < len(lines):
+        line = lines[i]
+        # Skip long content after "contents:"
+        if is_key_line(line) and "contents:" in line:
+            result.append(line.split("contents:")[0].rstrip() + " contents: " + _CODE_OMITTED)
+            i += 1
+            while i < len(lines):
+                if lines[i].startswith("[Tool") or is_key_line(lines[i]):
+                    break
+                i += 1
+            continue
+        # Skip long content after "old_string:"
+        if is_key_line(line) and "old_string:" in line:
+            result.append(line.split("old_string:")[0].rstrip() + " old_string: " + _CODE_OMITTED)
+            i += 1
+            while i < len(lines):
+                if lines[i].strip().startswith("new_string:") or lines[i].startswith("[Tool"):
+                    break
+                i += 1
+            continue
+        # Skip long content after "new_string:"
+        if is_key_line(line) and "new_string:" in line:
+            result.append(line.split("new_string:")[0].rstrip() + " new_string: " + _CODE_OMITTED)
+            i += 1
+            while i < len(lines):
+                if lines[i].startswith("[Tool") or (is_key_line(lines[i]) and "old_string:" in lines[i]):
+                    break
+                i += 1
+            continue
+        result.append(line)
+        i += 1
+    return "\n".join(result)
+
+
 def _clean_assistant_content(raw: str) -> str:
     """
-    Strip <think>...</think> blocks from assistant text for readable report.
-    Keep [Tool call] / [Tool result] so the report still shows what the agent did.
+    Strip <think>, remove/shorten code blocks and long tool call bodies,
+    so the report stays light for AI and focuses on what was done.
     """
     out = raw
     while True:
@@ -247,6 +311,8 @@ def _clean_assistant_content(raw: str) -> str:
         if not m:
             break
         out = out[: m.start()].rstrip() + "\n\n" + out[m.end() :].lstrip()
+    out = _remove_fenced_blocks(out)
+    out = _shorten_tool_call_body(out)
     return re.sub(r"\n{3,}", "\n\n", out).strip()
 
 
@@ -255,8 +321,13 @@ def build_report(
     start_hour: int = 3,
     end_hour: int = 1,
     max_first_message_chars: int = 500,
+    compact: bool = True,
 ) -> str:
-    """Build full markdown report: specs, work summary, and complete chat per session."""
+    """
+    Build markdown report for daily work.
+    If compact=True (default): only project, time, and work summary (user requests).
+    No full chat text — keeps report small for AI and human review.
+    """
     rows = collect_transcripts(report_date, start_hour, end_hour)
     by_project: dict[tuple[str, str], list[tuple[datetime, list[str], list[tuple[str, str]], str]]] = {}
     for slug, path, mtime, messages, full_turns, session_id in rows:
@@ -287,12 +358,7 @@ def build_report(
         for i, (mtime, all_msgs, full_turns, session_id) in enumerate(items, 1):
             lines.append(f"### Chat {i} — {mtime.strftime('%Y-%m-%d %H:%M')}")
             lines.append("")
-            lines.append("**Specs:**")
-            lines.append(f"- Session ID: `{session_id}`")
-            lines.append(f"- Last activity: {mtime.strftime('%Y-%m-%d %H:%M')}")
-            lines.append(f"- User messages: {len(all_msgs)} | Total turns: {len(full_turns)}")
-            lines.append("")
-            lines.append("**Work summary (requests / tasks):**")
+            lines.append(f"**کارهای درخواست‌شده ({len(all_msgs)} مورد):**")
             lines.append("")
             for j, msg in enumerate(all_msgs, 1):
                 preview = msg.strip()
@@ -301,21 +367,25 @@ def build_report(
                 lines.append(f"{j}. {preview}")
                 if "\n" in preview:
                     lines.append("")
-            lines.append("")
-            lines.append("**Full chat:**")
-            lines.append("")
-
-            for role, content in full_turns:
-                label = "**User**" if role == "user" else "**Assistant**"
-                lines.append(label)
+            if not compact:
                 lines.append("")
-                clean = _clean_assistant_content(content) if role == "assistant" else content
-                fence = _escape_fence(clean)
-                lines.append(fence)
-                lines.append(clean.strip())
-                lines.append(fence)
+                lines.append("**Specs:**")
+                lines.append(f"- Session ID: `{session_id}`")
+                lines.append(f"- Last activity: {mtime.strftime('%Y-%m-%d %H:%M')}")
+                lines.append(f"- Total turns: {len(full_turns)}")
                 lines.append("")
-
+                lines.append("**Full chat:**")
+                lines.append("")
+                for role, content in full_turns:
+                    label = "**User**" if role == "user" else "**Assistant**"
+                    lines.append(label)
+                    lines.append("")
+                    clean = _clean_assistant_content(content) if role == "assistant" else content
+                    fence = _escape_fence(clean)
+                    lines.append(fence)
+                    lines.append(clean.strip())
+                    lines.append(fence)
+                    lines.append("")
             lines.append("---")
             lines.append("")
 
@@ -364,6 +434,11 @@ def main() -> None:
         default=500,
         help="Max characters for first user message in report (default 500).",
     )
+    ap.add_argument(
+        "--full",
+        action="store_true",
+        help="Include full chat text (default: compact, only work summary).",
+    )
     args = ap.parse_args()
 
     if args.date:
@@ -380,6 +455,7 @@ def main() -> None:
         start_hour=args.start,
         end_hour=args.end,
         max_first_message_chars=args.max_chars,
+        compact=not args.full,
     )
 
     if args.output:

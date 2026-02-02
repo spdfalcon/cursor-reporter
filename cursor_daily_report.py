@@ -79,38 +79,82 @@ def parse_transcript(content: str) -> list[str]:
 def parse_transcript_full(content: str) -> list[tuple[str, str]]:
     """
     Parse full transcript into list of (role, content) turns.
-    Only top-level turns: accept "user:" only at file start or right after "assistant:".
+    User turns can start with "user:\n" (then optional <attached_files>, then <user_query>)
+    OR with "\n<user_query>" only (Cursor sometimes omits "user:\n" for later turns).
     """
     turns: list[tuple[str, str]] = []
     pos = 0
 
     while pos < len(content):
-        user_start = content.find("user:\n", pos)
-        if user_start == -1:
-            break
-        allowed = user_start == 0 or "assistant:" in content[max(0, user_start - 30) : user_start]
-        if not allowed:
-            pos = user_start + 1
-            continue
-        q_open = content.find("<user_query>", user_start)
-        if q_open == -1 or q_open > user_start + 20:
-            pos = user_start + 1
-            continue
-        q_content_start = content.find("\n", q_open) + 1
-        q_end = content.find("</user_query>", q_content_start)
-        if q_end == -1:
-            next_asst = content.find("\nassistant:", q_content_start)
-            user_content = content[q_content_start : next_asst].strip() if next_asst != -1 else content[q_content_start:].strip()
+        # Next user turn: either "\nuser:\n" or "\n<user_query>" (or "user:\n" at start)
+        at_start = pos == 0
+        find_user_line = content.find("user:\n", pos)
+        if at_start and content.startswith("user:\n"):
+            find_user_line = 0
+        find_query_tag = content.find("\n<user_query>", pos)
+        # Pick earliest valid start
+        next_user_line = find_user_line if find_user_line != -1 else len(content)
+        next_query_tag = find_query_tag if find_query_tag != -1 else len(content)
+        if at_start and find_user_line == 0:
+            turn_start = 0
+            use_query_only = False
+        elif next_user_line <= next_query_tag:
+            if next_user_line >= len(content):
+                break
+            allowed = (next_user_line == 0 or
+                       "assistant:" in content[max(0, next_user_line - 30) : next_user_line])
+            if not allowed:
+                pos = next_user_line + 1
+                continue
+            turn_start = next_user_line + 1  # after "\n", so at "user"
+            use_query_only = False
         else:
-            user_content = content[q_content_start:q_end].strip()
+            turn_start = next_query_tag + 2  # after "\n<", so at "user_query>"
+            use_query_only = True
+
+        if use_query_only:
+            q_open = turn_start - 1  # "\n<user_query>": "<" at turn_start-1
+            q_content_start = content.find("\n", q_open) + 1
+            q_end = content.find("</user_query>", q_content_start)
+            next_asst = content.find("\nassistant:", q_content_start)
+            if q_end != -1:
+                user_content = content[q_content_start:q_end].strip()
+            else:
+                user_content = (content[q_content_start:next_asst].strip()
+                                if next_asst != -1 else content[q_content_start:].strip())
+            user_start_for_asst = q_open
+        else:
+            user_start = turn_start
+            q_open = content.find("<user_query>", user_start)
+            next_asst = content.find("\nassistant:", user_start)
+            if q_open != -1 and (next_asst == -1 or q_open < next_asst):
+                q_content_start = content.find("\n", q_open) + 1
+                q_end = content.find("</user_query>", q_content_start)
+                if q_end != -1:
+                    user_content = content[q_content_start:q_end].strip()
+                else:
+                    user_content = (content[q_content_start:next_asst].strip()
+                                    if next_asst != -1 else content[q_content_start:].strip())
+            else:
+                user_content_start = user_start + 6  # len("user:\n")
+                user_content = (content[user_content_start:next_asst].strip()
+                               if next_asst != -1 else content[user_content_start:].strip())
+                if len(user_content) > 2000:
+                    user_content = user_content[:2000] + "\n… [truncated]"
+            user_start_for_asst = user_start
+
         if user_content:
             turns.append(("user", user_content))
-        asst_start = content.find("\nassistant:", user_start)
+        asst_start = content.find("\nassistant:", user_start_for_asst)
         if asst_start == -1:
             break
         asst_content_start = content.find("\n", asst_start + 1) + 1
-        next_user = content.find("\nuser:\n", asst_content_start)
-        if next_user == -1:
+        next_user_line = content.find("\nuser:\n", asst_content_start)
+        next_query_tag = content.find("\n<user_query>", asst_content_start)
+        next_user = next_user_line if next_user_line != -1 else len(content)
+        if next_query_tag != -1 and next_query_tag < next_user:
+            next_user = next_query_tag
+        if next_user >= len(content):
             asst_raw = content[asst_content_start:].strip()
         else:
             asst_raw = content[asst_content_start:next_user].strip()
@@ -121,7 +165,7 @@ def parse_transcript_full(content: str) -> list[tuple[str, str]]:
             visible = asst_raw
         if visible:
             turns.append(("assistant", visible))
-        pos = next_user if next_user != -1 else len(content)
+        pos = asst_content_start if next_user >= len(content) else next_user
 
     return turns
 

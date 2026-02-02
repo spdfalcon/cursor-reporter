@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-گزارش روزانهٔ Cursor را به Gemini می‌فرستد و یک گزارش کار کوتاه و تمیز (با تاریخ شمسی)
+گزارش روزانهٔ Cursor را به OpenRouter می‌فرستد و یک گزارش کار کوتاه (با تاریخ شمسی)
 برمی‌گرداند و ذخیره می‌کند.
 
-استفاده:
-  export GEMINI_API_KEY="your-key"
-  python3 gemini_summary_report.py گزارش-امروز.md
-  python3 gemini_summary_report.py  # اگر ندهی، خودش گزارش امروز را پیدا می‌کند
+استفاده (پیش‌فرض با OpenRouter؛ نیازی به تنظیم خاص نیست):
+  export OPENROUTER_API_KEY='your-key'   # یک‌بار یا در ~/.bashrc
+  python3 summary_report.py              # گزارش امروز
+  python3 summary_report.py reports/cursor-report-2026-02-01.md
 
-خروجی در همان پوشهٔ reports با نام gemini-report-YYYY-MM-DD.md
+خروجی: reports/summary-report-YYYY-MM-DD.md
 """
 
 import argparse
@@ -16,12 +16,14 @@ import json
 import os
 import sys
 from pathlib import Path
-from urllib.request import Request, urlopen
-from urllib.error import HTTPError, URLError
+import urllib.request
+import urllib.error
 
-
-# مدل پیش‌فرض؛ با GEMINI_MODEL می‌توانی عوضش کنی (مثلاً gemini-2.0-flash)
-DEFAULT_MODEL = "gemini-2.5-flash"
+# پیش‌فرض: OpenRouter (همین استاتیک است؛ نیازی به عوض کردن نیست)
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+DEFAULT_MODEL = "google/gemini-2.0-flash-001"
+# اگر OPENROUTER_API_KEY ست نکردی، این کلید استفاده می‌شود
+DEFAULT_API_KEY = "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"
 
 
 def load_report(path: Path) -> str:
@@ -48,68 +50,66 @@ def build_prompt(report_content: str, date_gregorian: str) -> str:
 """
 
 
-def call_gemini(api_key: str, prompt: str, model: str | None = None) -> str:
-    model = model or os.environ.get("GEMINI_MODEL") or DEFAULT_MODEL
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    body = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.3,
-            "maxOutputTokens": 2048,
-        },
+def call_openrouter(api_key: str, prompt: str, model: str | None = None) -> str:
+    model = model or os.environ.get("OPENROUTER_MODEL") or DEFAULT_MODEL
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
     }
-    req = Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.3,
+        "max_tokens": 2048,
+    }
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        OPENROUTER_URL,
+        data=data,
+        headers=headers,
         method="POST",
     )
     try:
-        with urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        raise SystemExit(f"خطای API جمنای (HTTP {e.code}): {body}")
-    except URLError as e:
-        raise SystemExit(f"خطای اتصال به جمنای: {e.reason}")
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            out = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")
+        raise SystemExit(f"خطای OpenRouter (HTTP {e.code}): {err_body}")
+    except urllib.error.URLError as e:
+        raise SystemExit(f"خطای اتصال به OpenRouter: {e.reason}")
 
     try:
-        text = (
-            data.get("candidates", [{}])[0]
-            .get("content", {})
-            .get("parts", [{}])[0]
-            .get("text", "")
-        )
+        text = out.get("choices", [{}])[0].get("message", {}).get("content", "")
     except (IndexError, KeyError):
-        raise SystemExit("پاسخی از جمنای دریافت نشد. پاسخ خام: " + json.dumps(data, ensure_ascii=False)[:500])
+        raise SystemExit("پاسخی از OpenRouter دریافت نشد. پاسخ خام: " + json.dumps(out, ensure_ascii=False)[:500])
 
-    if not text:
-        raise SystemExit("متن خروجی از جمنای خالی بود.")
+    if not (text and text.strip()):
+        raise SystemExit("متن خروجی خالی بود.")
     return text.strip()
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ارسال گزارش Cursor به جمنای و دریافت گزارش کار کوتاه")
+    parser = argparse.ArgumentParser(description="ارسال گزارش Cursor به OpenRouter و دریافت گزارش کار کوتاه")
     parser.add_argument(
         "report_file",
         nargs="?",
         default=None,
-        help="مسیر فایل گزارش خام (مثلاً reports/cursor-report-2026-02-01.md). اگر ندهی، گزارش امروز استفاده می‌شود.",
+        help="مسیر فایل گزارش خام. اگر ندهی، گزارش امروز استفاده می‌شود.",
     )
     parser.add_argument(
         "--api-key",
-        default=os.environ.get("GEMINI_API_KEY"),
-        help="کلید API جمنای (یا از env: GEMINI_API_KEY)",
+        default=os.environ.get("OPENROUTER_API_KEY") or DEFAULT_API_KEY,
+        help="کلید API OpenRouter (پیش‌فرض: env OPENROUTER_API_KEY یا کلید داخلی)",
     )
     parser.add_argument(
         "--output",
         default=None,
-        help="مسیر ذخیرهٔ گزارش نهایی (پیش‌فرض: reports/gemini-report-YYYY-MM-DD.md)",
+        help="مسیر ذخیرهٔ گزارش نهایی (پیش‌فرض: reports/summary-report-YYYY-MM-DD.md)",
     )
     parser.add_argument(
         "--model",
-        default=os.environ.get("GEMINI_MODEL") or DEFAULT_MODEL,
-        help="نام مدل جمنای (پیش‌فرض: gemini-2.5-flash؛ یا env GEMINI_MODEL)",
+        default=os.environ.get("OPENROUTER_MODEL") or DEFAULT_MODEL,
+        help=f"مدل OpenRouter (پیش‌فرض: {DEFAULT_MODEL})",
     )
     args = parser.parse_args()
 
@@ -130,20 +130,20 @@ def main() -> None:
         sys.exit(1)
 
     if not args.api_key:
-        print("کلید API جمنای را تنظیم کن: export GEMINI_API_KEY='...' یا --api-key=...", file=sys.stderr)
+        print("کلید OpenRouter را تنظیم کن: export OPENROUTER_API_KEY='...' یا --api-key=...", file=sys.stderr)
         sys.exit(1)
 
     date_gregorian = report_path.stem.replace("cursor-report-", "") if "cursor-report-" in report_path.name else "امروز"
     report_content = load_report(report_path)
     prompt = build_prompt(report_content, date_gregorian)
 
-    print("در حال ارسال به جمنای...")
-    summary = call_gemini(args.api_key, prompt, model=args.model)
+    print("در حال ارسال به OpenRouter...")
+    summary = call_openrouter(args.api_key, prompt, model=args.model)
 
     if args.output:
         out_path = Path(args.output)
     else:
-        out_path = reports_dir / f"gemini-report-{date_gregorian}.md"
+        out_path = reports_dir / f"summary-report-{date_gregorian}.md"
     if not out_path.is_absolute():
         out_path = (script_dir / out_path).resolve()
 

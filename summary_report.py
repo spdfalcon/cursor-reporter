@@ -23,7 +23,7 @@ import urllib.error
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "google/gemini-2.0-flash-001"
 # اگر OPENROUTER_API_KEY ست نکردی، این کلید استفاده می‌شود
-DEFAULT_API_KEY = "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"
+DEFAULT_API_KEY = "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"
 
 
 def load_report(path: Path) -> str:

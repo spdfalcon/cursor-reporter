@@ -3,8 +3,9 @@
 گزارش روزانهٔ Cursor را به OpenRouter می‌فرستد و یک گزارش کار کوتاه (با تاریخ شمسی)
 برمی‌گرداند و ذخیره می‌کند.
 
-استفاده (پیش‌فرض با OpenRouter؛ نیازی به تنظیم خاص نیست):
-  export OPENROUTER_API_KEY='your-key'   # یک‌بار یا در ~/.bashrc
+فقط از مدل openai/gpt-oss-120b:free (رایگان) استفاده می‌شود.
+
+استفاده:
   python3 summary_report.py              # گزارش امروز
   python3 summary_report.py reports/cursor-report-2026-02-01.md
 
@@ -19,11 +20,13 @@ from pathlib import Path
 import urllib.request
 import urllib.error
 
-# پیش‌فرض: OpenRouter (همین استاتیک است؛ نیازی به عوض کردن نیست)
+# فقط این مدل (رایگان)
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "google/gemini-2.0-flash-001"
+DEFAULT_MODEL = "openai/gpt-oss-120b:free"
+REQUEST_TIMEOUT = 180  # ثانیه
+MAX_RETRIES = 3
 # اگر OPENROUTER_API_KEY ست نکردی، این کلید استفاده می‌شود
-DEFAULT_API_KEY = "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"
+DEFAULT_API_KEY = "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"
 
 
 def load_report(path: Path) -> str:
@@ -50,8 +53,8 @@ def build_prompt(report_content: str, date_gregorian: str) -> str:
 """
 
 
-def call_openrouter(api_key: str, prompt: str, model: str | None = None) -> str:
-    model = model or os.environ.get("OPENROUTER_MODEL") or DEFAULT_MODEL
+def _request_one(api_key: str, prompt: str, model: str) -> str:
+    """یک درخواست با مدل مشخص؛ در صورت خطا exception می‌اندازد."""
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -69,23 +72,39 @@ def call_openrouter(api_key: str, prompt: str, model: str | None = None) -> str:
         headers=headers,
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            out = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")
-        raise SystemExit(f"خطای OpenRouter (HTTP {e.code}): {err_body}")
-    except urllib.error.URLError as e:
-        raise SystemExit(f"خطای اتصال به OpenRouter: {e.reason}")
-
+    with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        out = json.loads(resp.read().decode("utf-8"))
     try:
         text = out.get("choices", [{}])[0].get("message", {}).get("content", "")
     except (IndexError, KeyError):
-        raise SystemExit("پاسخی از OpenRouter دریافت نشد. پاسخ خام: " + json.dumps(out, ensure_ascii=False)[:500])
-
+        raise ValueError("پاسخی از OpenRouter دریافت نشد: " + json.dumps(out, ensure_ascii=False)[:300])
     if not (text and text.strip()):
-        raise SystemExit("متن خروجی خالی بود.")
+        raise ValueError("متن خروجی خالی بود.")
     return text.strip()
+
+
+def call_openrouter(api_key: str, prompt: str, model: str | None = None) -> str:
+    """فقط با مدل openai/gpt-oss-120b:free درخواست می‌زند (با رتری برای timeout)."""
+    current_model = model or os.environ.get("OPENROUTER_MODEL") or DEFAULT_MODEL
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            if attempt > 1:
+                print(f"  تلاش مجدد ({attempt}/{MAX_RETRIES})...")
+            return _request_one(api_key, prompt, current_model)
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8", errors="replace")
+            raise SystemExit(f"خطای OpenRouter (HTTP {e.code}): {err_body}")
+        except urllib.error.URLError as e:
+            if "timed out" in str(e.reason).lower() or "timeout" in str(e.reason).lower():
+                if attempt < MAX_RETRIES:
+                    print(f"  زمان درخواست تمام شد؛ تلاش مجدد ({attempt}/{MAX_RETRIES})...")
+                    continue
+            raise SystemExit(f"خطای اتصال به OpenRouter: {e.reason}")
+        except ValueError as e:
+            raise SystemExit(str(e))
+
+    raise SystemExit("درخواست بعد از چند تلاش ناموفق بود.")
 
 
 def main() -> None:

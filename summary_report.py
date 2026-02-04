@@ -8,7 +8,7 @@ Usage:
   python3 summary_report.py reports/cursor-report-2026-02-01.md
 
 Output: reports/summary-report-YYYY-MM-DD.md
-Built-in API key is used by default; override with GEMINI_API_KEY or --api-key.
+API key is read from .env (GEMINI_API_KEY) or --api-key.
 """
 
 import argparse
@@ -22,9 +22,24 @@ import urllib.error
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEFAULT_MODEL = "gemini-2.5-flash"
-DEFAULT_API_KEY = "AIzaSyCbv5_wcJ83ta5xGoOvKpmBiUT14MDHyyI"
 REQUEST_TIMEOUT = 120
 MAX_RETRIES = 3
+
+
+def load_dotenv(env_path: Path) -> None:
+    """Load KEY=VALUE from .env into os.environ (std lib only)."""
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip("'\"")
+            if key:
+                os.environ.setdefault(key, value)
 
 
 def load_report(path: Path) -> str:
@@ -103,6 +118,9 @@ def call_gemini(api_key: str, prompt: str, model: str | None = None) -> str:
 
 
 def main() -> None:
+    script_dir = Path(__file__).resolve().parent
+    load_dotenv(script_dir / ".env")
+
     parser = argparse.ArgumentParser(
         description="Send Cursor raw report to Gemini and save short work summary."
     )
@@ -114,8 +132,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--api-key",
-        default=os.environ.get("GEMINI_API_KEY") or DEFAULT_API_KEY,
-        help="Gemini API key (default: built-in key in project).",
+        default=os.environ.get("GEMINI_API_KEY"),
+        help="Gemini API key (default: GEMINI_API_KEY from .env or env).",
     )
     parser.add_argument(
         "--output",
@@ -129,7 +147,6 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    script_dir = Path(__file__).resolve().parent
     reports_dir = script_dir / "reports"
 
     if args.report_file:
@@ -143,6 +160,13 @@ def main() -> None:
 
     if not report_path.exists():
         print(f"Report file not found: {report_path}", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.api_key:
+        print(
+            "Set GEMINI_API_KEY in .env or pass --api-key=...",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     date_gregorian = (

@@ -6,10 +6,10 @@ Collects Cursor chats and builds a raw report; then sends it to **Google Gemini 
 
 ## Requirements
 
-- **Linux** (e.g. Ubuntu)
+- **OS:** Linux, macOS, or Windows (Cursor paths are detected per OS)
 - **Python 3**
-- Cursor with Agent/Composer mode (so transcripts are saved under `~/.cursor/projects/`)
-- **Gemini API key:** A key is built into the project; no setup needed. To use your own: `export GEMINI_API_KEY='...'`
+- Cursor with Agent/Composer mode (transcripts under `~/.cursor/projects/<project>/agent-transcripts/`)
+- **Gemini API key:** Put `GEMINI_API_KEY=...` in project `.env`, or set in environment / `--api-key`
 
 ---
 
@@ -53,3 +53,15 @@ Output:
   `python3 summary_report.py reports/cursor-report-2026-02-01.md`
 
 Reference: [Gemini API quickstart](https://ai.google.dev/gemini-api/docs/quickstart)
+
+---
+
+## How it finds Cursor data (multi-OS)
+
+- **Agent transcripts:** `~/.cursor/projects/<project>/agent-transcripts/*.txt` (same path on Linux, macOS, Windows).
+- **Workspace paths** (to show real project folder paths) are read from Cursor’s workspace storage:
+  - **Linux:** `~/.config/Cursor/User/workspaceStorage/*/workspace.json`
+  - **macOS:** `~/Library/Application Support/Cursor/User/workspaceStorage/*/workspace.json`
+  - **Windows:** `%APPDATA%\Cursor\User\workspaceStorage\*\workspace.json`
+
+If a project is not in workspace storage, the script falls back to a path derived from the project slug (e.g. `home-user-foo` → `/home/user/foo` on Linux).

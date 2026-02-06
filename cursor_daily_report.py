@@ -15,12 +15,29 @@ Usage:
 import argparse
 import os
 import re
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
 
-CURSOR_PROJECTS = Path.home() / ".cursor" / "projects"
-CURSOR_WS_STORAGE = Path.home() / ".config" / "Cursor" / "User" / "workspaceStorage"
+def _cursor_projects_root() -> Path:
+    """Cursor agent-transcripts root: same on Linux/macOS; Windows may use .cursor under home."""
+    return Path.home() / ".cursor" / "projects"
+
+
+def _cursor_workspace_storage() -> Path:
+    """Cursor workspaceStorage path (for workspace.json). Varies by OS."""
+    home = Path.home()
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support" / "Cursor" / "User" / "workspaceStorage"
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA", home / "AppData" / "Roaming")
+        return Path(appdata) / "Cursor" / "User" / "workspaceStorage"
+    return home / ".config" / "Cursor" / "User" / "workspaceStorage"
+
+
+CURSOR_PROJECTS = _cursor_projects_root()
+CURSOR_WS_STORAGE = _cursor_workspace_storage()
 
 
 def slug_to_path(slug: str) -> str:
